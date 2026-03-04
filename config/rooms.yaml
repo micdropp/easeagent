@@ -1,0 +1,63 @@
+rooms:
+  - id: entrance
+    name: 大门入口
+    cameras:
+      - cam_entrance
+    devices:
+      screens:
+        - screen_entrance
+
+  - id: zone_a
+    name: A区办公区
+    cameras:
+      - cam_zone_a
+    devices:
+      lights:
+        - light_a1
+        - light_a2
+        - light_a3
+      acs:
+        - ac_a1
+      screens:
+        - screen_a1
+    reflex_rules:
+      no_person_delay: 300
+      co2_high_threshold: 1000
+
+  - id: meeting_1
+    name: 1号会议室
+    cameras:
+      - cam_meeting_1
+    devices:
+      lights:
+        - light_m1
+      acs:
+        - ac_m1
+      screens:
+        - screen_m1
+    reflex_rules:
+      no_person_delay: 600
+      co2_high_threshold: 1000
+
+cameras:
+  # 开发模式：使用本地 webcam，URL 格式为 webcam://设备序号
+  # 部署时替换为 RTSP 地址
+  - id: cam_entrance
+    rtsp_url: webcam://0
+    room: entrance
+    purpose:
+      - face_recognition
+      - person_detection
+
+  # 以下 RTSP 摄像头部署时取消注释
+  # - id: cam_zone_a
+  #   rtsp_url: rtsp://192.168.1.11:554/stream1
+  #   room: zone_a
+  #   purpose:
+  #     - person_detection
+
+  # - id: cam_meeting_1
+  #   rtsp_url: rtsp://192.168.1.12:554/stream1
+  #   room: meeting_1
+  #   purpose:
+  #     - person_detection

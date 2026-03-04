@@ -1,0 +1,43 @@
+# EaseAgent Phase 1 Dependencies
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+
+# MQTT
+aiomqtt>=2.5.0
+
+# Redis
+redis>=7.2.0
+
+# Configuration
+pyyaml==6.0.2
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# HTTP client
+httpx==0.28.1
+
+# Vector database (Phase 4, install early for docker-compose)
+chromadb==1.4.1
+
+# Utilities
+python-dotenv==1.0.1
+
+# Scheduling
+apscheduler==3.10.4
+
+# Phase 2 - Perception / Reflex Layer
+ultralytics>=8.3.0
+insightface>=0.7.3
+opencv-python-headless>=4.9
+onnxruntime-gpu>=1.17.0
+numpy>=1.24.0
+
+# Phase 3 - Cognition / AI Agent Layer
+openai>=1.30.0

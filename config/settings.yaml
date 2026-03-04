@@ -1,0 +1,56 @@
+server:
+  host: 0.0.0.0
+  port: 8000
+  debug: true
+
+mqtt:
+  broker: ${MQTT_BROKER:-localhost}
+  port: ${MQTT_PORT:-1883}
+  client_id: easeagent-core
+  topic_prefix: easeagent
+  keepalive: 60
+  reconnect_interval: 5
+
+redis:
+  host: ${REDIS_HOST:-localhost}
+  port: ${REDIS_PORT:-6379}
+  db: 0
+  decision_cache_ttl: 7200
+
+database:
+  url: ${DATABASE_URL:-sqlite+aiosqlite:///./data/easeagent.db}
+  echo: false
+
+chromadb:
+  host: localhost
+  port: 8100
+  persist_directory: ./data/chromadb
+
+ai:
+  enabled: true
+  yolo_model: yolov8n.pt
+  face_model: buffalo_l
+  detection_interval: 0.1
+  face_recognition_threshold: 0.45
+  camera_width: 1920    # 720p=1280x720, 1080p=1920x1080
+  camera_height: 1080
+
+llm:
+  provider: dashscope
+  model: qwen3.5-plus
+  api_key: ${DASHSCOPE_API_KEY}
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  max_retries: 2
+  timeout: 30
+  fallback_provider: ollama
+  fallback_model: qwen3.5:9b
+  fallback_base_url: http://localhost:11434
+  patrol_interval: 30.0
+  ssim_threshold: 0.85
+
+feishu:
+  enabled: false
+
+device_heartbeat:
+  interval: 30
+  timeout: 90

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment & secrets
+.env
+*.key
+
+# Data
+data/*.db
+data/chromadb/
+data/faces/
+
+# Logs
+logs/
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.cursor/
+
+# Models
+*.pt
+*.onnx
+
+# Pack output
+easeagent-*.zip
