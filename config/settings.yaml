@@ -28,7 +28,7 @@ chromadb:
 
 ai:
   enabled: true
-  yolo_model: yolov8n.pt
+  yolo_model: models/yolov8n.pt
   face_model: buffalo_l
   detection_interval: 0.1
   face_recognition_threshold: 0.45

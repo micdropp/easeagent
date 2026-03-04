@@ -23,13 +23,16 @@ env/
 .env
 *.key
 
-# Data
+# Data (keep directory skeleton via .gitkeep)
 data/*.db
 data/chromadb/
-data/faces/
+data/faces/*
+!data/.gitkeep
+!data/faces/.gitkeep
 
-# Logs
-logs/
+# Logs (keep directory skeleton via .gitkeep)
+logs/*
+!logs/.gitkeep
 *.log
 
 # Docker
@@ -42,9 +45,10 @@ Thumbs.db
 # IDE / Editor
 .cursor/
 
-# Models
+# Models (keep bundled YOLO weight)
 *.pt
 *.onnx
+!models/yolov8n.pt
 
 # Pack output
 easeagent-*.zip

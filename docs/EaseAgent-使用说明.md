@@ -1,6 +1,6 @@
 # EaseAgent 使用说明
 
-> 最后更新: 2026-03-04 | 版本: Phase 4 (记忆层)
+> 最后更新: 2026-03-04 | 版本: Phase 4 (记忆层) | 部署方式: GitHub
 
 ## 1. 项目简介
 
@@ -34,80 +34,75 @@ EaseAgent 是一个基于 AI 的智能办公环境管理系统。它通过摄像
 
 ## 3. 安装部署
 
-### 3.1 本地部署
+### 3.1 获取源码
 
-```bash
-# 1. 克隆项目
-git clone <repo-url> easeagent
+```powershell
+# 从 GitHub 克隆（替换为实际仓库地址）
+git clone https://github.com/<你的用户名>/easeagent.git
 cd easeagent
+```
 
-# 2. 创建虚拟环境
+后续更新只需：
+
+```powershell
+git pull
+```
+
+### 3.2 首次环境搭建 (一次性操作)
+
+以下步骤只在首次部署时执行，之后日常启动跳到 **5.1**。
+
+**Step 1: 创建虚拟环境 + 安装依赖**
+
+```powershell
 python -m venv .venv
-
-# Windows
 .venv\Scripts\activate
-
-# Linux/Mac
-source .venv/bin/activate
-
-# 3. 安装依赖
 pip install -r requirements.txt
 ```
 
-### 3.2 安装 Ollama 并拉取本地模型
+**Step 2: 配置环境变量**
 
-```bash
-# Windows: 从 https://ollama.com/download 下载安装
-
-# 启动 Ollama 服务 (通常安装后自动启动)
-ollama serve
-
-# 拉取 Qwen3.5 9B 模型 (约 6.6 GB)
-ollama pull qwen3.5:9b
-
-# 验证
-ollama list
+```powershell
+copy .env.example .env
+# 用编辑器打开 .env，填入 DASHSCOPE_API_KEY（阿里云灵积平台获取）
 ```
 
-### 3.3 启动 Redis 和 Mosquitto
+**Step 3: 安装 Docker Desktop + 启动基础服务**
 
-**方式一：Docker Compose (推荐)**
-
-```bash
+```powershell
+# 安装 Docker Desktop: https://docs.docker.com/desktop/install/windows-install/
 docker-compose up -d mosquitto redis chromadb
 ```
 
-**方式二：手动安装**
+**Step 4: 安装 Ollama + 拉取本地模型**
 
-```bash
-# Redis
-# Windows: 使用 WSL 或 Memurai
-# Linux: sudo apt install redis-server && sudo systemctl start redis
-
-# Mosquitto
-# Windows: https://mosquitto.org/download/
-# Linux: sudo apt install mosquitto && sudo systemctl start mosquitto
+```powershell
+# 安装: https://ollama.com/download
+ollama serve                   # 首次启动服务
+ollama pull qwen3.5:9b         # 下载模型，约 6.6 GB，需耐心等待
+ollama list                    # 验证模型已下载
 ```
 
-### 3.4 Docker Compose 一键部署
+### 3.3 模型说明
 
-```bash
-# 启动全部服务 (含 EaseAgent 主应用)
-docker-compose up -d
+| 模型 | 大小 | 获取方式 | 说明 |
+| --- | --- | --- | --- |
+| YOLOv8n | 6 MB | 已随仓库提供 (`models/yolov8n.pt`) | 人员检测，无需额外下载 |
+| InsightFace buffalo_l | ~300 MB | 首次运行自动下载 | 人脸识别，需联网，下载到 `~/.insightface/models/` |
+| Qwen3.5:9b | ~6.6 GB | `ollama pull qwen3.5:9b` | 本地 LLM，需手动拉取 |
+| Qwen3.5-plus | 云端 | 填写 `DASHSCOPE_API_KEY` | 云端 LLM (阿里云)，按调用计费 |
 
-# 查看日志
-docker-compose logs -f core
+### 3.4 Docker Compose 服务
+
+```powershell
+docker-compose up -d mosquitto redis chromadb
 ```
 
-Docker Compose 包含的服务：
-
-
-| 服务          | 端口         | 说明            |
-| ----------- | ---------- | ------------- |
-| `mosquitto` | 1883, 9001 | MQTT Broker   |
-| `redis`     | 6379       | 缓存            |
-| `chromadb`  | 8100       | 向量数据库         |
-| `core`      | 8000       | EaseAgent 主应用 |
+| 服务 | 端口 | 说明 |
+| --- | --- | --- |
+| `mosquitto` | 1883, 9001 | MQTT Broker |
+| `redis` | 6379 | 决策缓存 |
+| `chromadb` | 8100 | 向量数据库 (记忆层) |
 
 
 ---
@@ -206,27 +201,17 @@ cameras:
 
 ## 5. 启动运行
 
-### 5.1 本地启动
-
-完整启动流程（PowerShell）：
+### 5.1 日常启动 (每次开机后)
 
 ```powershell
-# ── 第 1 步：启动基础设施 (Docker) ──
+# 1. 启动基础设施
 docker-compose up -d mosquitto redis chromadb
 
-# 验证容器运行状态
-docker-compose ps
-# mosquitto, redis, chromadb 三个容器应为 running
+# 2. 启动 Ollama（如未自动启动）
+ollama serve                    # 新终端，保持后台运行
 
-# ── 第 2 步：启动 Ollama（如未自动启动） ──
-ollama serve                    # 在新终端中运行，保持后台
-ollama pull qwen3.5:9b          # 首次需拉取模型 (约 6.6GB)
-ollama list                     # 确认模型已下载
-
-# ── 第 3 步：激活虚拟环境 ──
+# 3. 激活虚拟环境 + 启动服务
 .venv\Scripts\activate
-
-# ── 第 4 步：启动 EaseAgent 主服务 ──
 python run.py
 ```
 
@@ -236,7 +221,16 @@ python run.py
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
-启动顺序很重要：Docker 服务 -> Ollama -> EaseAgent。如果顺序不对，系统会自动降级（如 ChromaDB 不可用时降级为仅 SQLite），但功能不完整。
+> 启动顺序很重要：Docker 服务 -> Ollama -> EaseAgent。如果顺序不对，系统会自动降级（如 ChromaDB 不可用时降级为仅 SQLite），但功能不完整。
+
+### 5.1.1 同事拿到代码后的完整流程
+
+```
+git clone -> 复制 .env -> 创建 venv + pip install -> docker-compose up -d
+-> ollama serve + ollama pull -> python run.py -> 访问 localhost:8000
+```
+
+首次环境搭建详见 **3.2**，之后每次只需执行 **5.1** 即可。如果代码有更新，先 `git pull` 再启动。
 
 ### 5.2 验证服务
 
@@ -626,6 +620,9 @@ easeagent/
 ├── .env                      # 环境变量 (不入库)
 ├── .env.example              # 环境变量模板
 ├── Dockerfile
+│
+├── models/                   # 预置模型
+│   └── yolov8n.pt            # YOLOv8n 人员检测 (随仓库提供)
 │
 ├── config/                   # 配置文件
 │   ├── settings.yaml         # 主配置

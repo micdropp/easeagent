@@ -6,27 +6,62 @@
 
 - Python 3.11+
 - NVIDIA GPU（推荐 RTX 4090）+ CUDA 12.x
-- Docker（运行 Redis、Mosquitto、ChromaDB）
+- Docker Desktop（运行 Redis、Mosquitto、ChromaDB）
 - Ollama（本地 LLM 推理）
 
 ## 快速开始
 
+### 首次部署
+
 ```powershell
-# 1. 环境准备
-copy .env.example .env           # 填入 DASHSCOPE_API_KEY
+# 1. 克隆 & 环境准备
+git clone https://github.com/<你的用户名>/easeagent.git
+cd easeagent
+copy .env.example .env           # 编辑 .env，填入 DASHSCOPE_API_KEY
+
+# 2. Python 虚拟环境
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. 启动基础设施
+# 3. 基础设施
+docker-compose up -d mosquitto redis chromadb
+
+# 4. Ollama 本地模型
+ollama serve                     # 新终端
+ollama pull qwen3.5:9b           # 约 6.6 GB，首次需下载
+
+# 5. 启动
+python run.py
+```
+
+### 日常启动 (每次开机后)
+
+```powershell
 docker-compose up -d mosquitto redis chromadb
 ollama serve                     # 新终端
-ollama pull qwen3.5:9b           # 首次需下载
-
-# 3. 启动服务
+.venv\Scripts\activate
 python run.py
-# 访问 http://localhost:8000/health?detail=true 验证
 ```
+
+访问 http://localhost:8000/health?detail=true 验证所有组件。
+
+### 后续更新
+
+```powershell
+git pull                         # 拉取最新代码
+pip install -r requirements.txt  # 如有新依赖
+python run.py
+```
+
+## 模型说明
+
+| 模型 | 大小 | 获取方式 |
+| --- | --- | --- |
+| YOLOv8n (人员检测) | 6 MB | 已随仓库提供 `models/yolov8n.pt` |
+| InsightFace buffalo_l (人脸识别) | ~300 MB | 首次运行自动下载 |
+| Qwen3.5:9b (本地 LLM) | ~6.6 GB | `ollama pull qwen3.5:9b` |
+| Qwen3.5-plus (云端 LLM) | 云端 | 填写 `.env` 中的 `DASHSCOPE_API_KEY` |
 
 ## 文档
 
