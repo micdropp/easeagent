@@ -140,10 +140,11 @@ TOOL_DEFINITIONS: list[dict] = [
                             "announcement",
                             "dashboard",
                             "custom",
+                            "off",
                         ],
                         "description": (
                             "welcome=迎宾, schedule=日程, "
-                            "announcement=公告, dashboard=看板, custom=自定义"
+                            "announcement=公告, dashboard=看板, custom=自定义, off=关闭屏幕"
                         ),
                     },
                     "message": {

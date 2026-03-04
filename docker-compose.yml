@@ -1,13 +1,13 @@
+version: "3.8"
+
 services:
   mosquitto:
     image: eclipse-mosquitto:2
     ports:
       - "1883:1883"
-      - "9001:9001"
     volumes:
-      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
     restart: unless-stopped
 
   redis:
@@ -16,40 +16,52 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
     restart: unless-stopped
 
   chromadb:
-    image: chromadb/chroma:1.4.1
+    image: chromadb/chroma:latest
     ports:
       - "8100:8000"
     volumes:
-      - chroma_data:/data
+      - chroma_data:/chroma/chroma
     environment:
-      - IS_PERSISTENT=TRUE
-      - PERSIST_DIRECTORY=/data
+      - ANONYMIZED_TELEMETRY=false
     restart: unless-stopped
 
   core:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
-      - ./data:/app/data
     env_file:
       - .env
     environment:
-      - MQTT_BROKER=mosquitto
-      - REDIS_HOST=redis
+      - EASEAGENT_MQTT__BROKER=mosquitto
+      - EASEAGENT_REDIS__HOST=redis
+      - EASEAGENT_REDIS__PORT=6379
+      - EASEAGENT_CHROMADB__HOST=chromadb
+      - EASEAGENT_CHROMADB__PORT=8000
     depends_on:
       - mosquitto
       - redis
       - chromadb
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - core
     restart: unless-stopped
 
 volumes:
   mosquitto_data:
-  mosquitto_log:
   redis_data:
   chroma_data:

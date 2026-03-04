@@ -39,6 +39,16 @@ class MQTTClient:
     def on_message(self, topic_filter: str, handler: MessageHandler):
         self._handlers.setdefault(topic_filter, []).append(handler)
 
+    async def subscribe_topic(self, topic_filter: str, handler: MessageHandler):
+        """Register a handler and subscribe immediately if already connected."""
+        self.on_message(topic_filter, handler)
+        if self._client and self._connected:
+            try:
+                await self._client.subscribe(topic_filter)
+                logger.debug("Late-subscribed to %s", topic_filter)
+            except Exception:
+                logger.warning("Failed to late-subscribe to %s", topic_filter)
+
     async def publish(self, topic: str, payload: dict | str, qos: int = 1):
         if not self._client or not self._connected:
             logger.warning("MQTT not connected, cannot publish to %s", topic)

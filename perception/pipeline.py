@@ -17,6 +17,8 @@ from perception.detector import PersonDetector
 from perception.face_recognizer import FaceRecognizer
 from perception.frame_sampler import FrameSampler
 from perception.person_tracker import PersonTracker, TrackedPerson
+from perception.identity_fusion import IdentityFusion
+from perception.reid_extractor import ReIDExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,9 @@ class PerceptionPipeline:
             width=settings.ai.camera_width,
             height=settings.ai.camera_height,
         )
+
+        self._reid = ReIDExtractor()
+        self._fusion = IdentityFusion()
 
         self._room_count: dict[str, int] = {}
         self._cam_room: dict[str, str] = {}
@@ -155,6 +160,106 @@ class PerceptionPipeline:
             self._fps[camera_id] = (len(times) - 1) / (times[-1] - times[0])
         else:
             self._fps[camera_id] = 0.0
+
+    # ------------------------------------------------------------------
+    # Identity fusion (face + ReID + future BLE/badge)
+    # ------------------------------------------------------------------
+
+    async def _fuse_identities(
+        self,
+        tracker: PersonTracker,
+        active_tracks: list[TrackedPerson],
+        recognized: list[dict],
+        frame: np.ndarray,
+        camera_id: str,
+    ) -> None:
+        from perception.person_tracker import _center_inside, _iou
+
+        # Step 1: bind face results to tracks (build face signal map)
+        face_signals: dict[int, tuple[str, float]] = {}
+        for face in recognized:
+            emp_id = face.get("employee_id")
+            if emp_id is None or emp_id == "unknown":
+                continue
+            face_bbox = face["bbox"]
+            best_track: TrackedPerson | None = None
+            best_iou = -1.0
+            for track in active_tracks:
+                if _center_inside(face_bbox, track.bbox):
+                    iou_val = _iou(face_bbox, track.bbox)
+                    if iou_val > best_iou:
+                        best_iou = iou_val
+                        best_track = track
+            if best_track is not None:
+                face_signals[best_track.track_id] = (emp_id, face.get("confidence", 0.0))
+
+        # Step 2: extract ReID features for all tracks that need them
+        reid_signals: dict[int, tuple[str, float]] = {}
+        needs_reid = [
+            t for t in active_tracks if t.appearance is None
+        ]
+        if self._reid.available and needs_reid:
+            bboxes = [t.bbox for t in needs_reid]
+            features = await self._reid.extract(frame, bboxes)
+            all_trackers = list(self._trackers.values())
+            for track, feat in zip(needs_reid, features):
+                track.set_appearance(feat)
+                match = tracker.match_by_appearance(feat)
+                if match is None:
+                    match = tracker.match_across_galleries(feat, all_trackers)
+                if match is not None:
+                    reid_signals[track.track_id] = (
+                        match.employee_id, match.confidence * 0.9
+                    )
+
+        # Step 3: fuse signals per track
+        for track in active_tracks:
+            if track.employee_id is not None:
+                continue
+
+            face_sig = face_signals.get(track.track_id)
+            reid_sig = reid_signals.get(track.track_id)
+
+            if face_sig is None and reid_sig is None:
+                continue
+
+            # If only one signal, use it directly (fast path)
+            if face_sig and not reid_sig:
+                track.bind_identity(face_sig[0], face_sig[1])
+                continue
+            if reid_sig and not face_sig:
+                track.bind_identity(reid_sig[0], reid_sig[1])
+                logger.info(
+                    "ReID matched track #%d → %s", track.track_id, reid_sig[0]
+                )
+                continue
+
+            # Both signals available — fuse
+            result = self._fusion.fuse_for_track(
+                face_id=face_sig[0] if face_sig else None,
+                face_confidence=face_sig[1] if face_sig else 0.0,
+                reid_id=reid_sig[0] if reid_sig else None,
+                reid_confidence=reid_sig[1] if reid_sig else 0.0,
+            )
+            if result is not None:
+                track.bind_identity(result.employee_id, result.fused_score)
+                logger.debug(
+                    "Fusion identified track #%d → %s (score=%.3f, signals=%d)",
+                    track.track_id, result.employee_id,
+                    result.fused_score, len(result.signals),
+                )
+
+        # Step 4: also update appearance for newly identified tracks
+        if self._reid.available:
+            need_app = [
+                t for t in active_tracks
+                if t.employee_id is not None and t.appearance is None
+            ]
+            if need_app:
+                bboxes = [t.bbox for t in need_app]
+                features = await self._reid.extract(frame, bboxes)
+                for track, feat in zip(need_app, features):
+                    track.set_appearance(feat)
 
     # ------------------------------------------------------------------
     # Overlay drawing
@@ -296,6 +401,14 @@ class PerceptionPipeline:
             return
         await self._detector.load()
         await self._recognizer.load()
+        try:
+            await self._reid.load()
+            if self._reid.available:
+                logger.info("ReID extractor loaded")
+            else:
+                logger.info("ReID extractor not available (torchreid not installed), skipping")
+        except Exception:
+            logger.warning("ReID extractor failed to load, continuing without it")
         await self._camera_mgr.start()
         logger.info("Perception pipeline started")
 
@@ -303,6 +416,7 @@ class PerceptionPipeline:
         await self._camera_mgr.stop()
         await self._detector.unload()
         await self._recognizer.unload()
+        await self._reid.unload()
         logger.info("Perception pipeline stopped")
 
     # ------------------------------------------------------------------
@@ -333,8 +447,10 @@ class PerceptionPipeline:
 
         active_tracks, lost_tracks = tracker.update(detections)
 
-        # Bind face identities to tracked persons
-        tracker.bind_faces_to_tracks(recognized)
+        # --- Identity binding via fusion engine ---
+        await self._fuse_identities(
+            tracker, active_tracks, recognized, frame, camera_id
+        )
 
         # --- Room occupancy state machine ---
         occupants = self._room_occupants.setdefault(room_id, {})

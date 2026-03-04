@@ -41,3 +41,9 @@ numpy>=1.24.0
 
 # Phase 3 - Cognition / AI Agent Layer
 openai>=1.30.0
+
+# Phase 5 - ReID / Cross-camera tracking (optional, graceful degradation)
+torchreid>=0.2.5
+
+# Phase 5 - MQTT simulation scripts
+paho-mqtt>=2.0.0

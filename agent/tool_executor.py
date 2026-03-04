@@ -25,12 +25,14 @@ class ToolExecutor:
         db_session_factory: Any,
         redis_client: Any | None = None,
         implicit_store: Any | None = None,
+        feishu_bot: Any | None = None,
     ):
         self._mqtt = mqtt_client
         self._devices = device_registry
         self._db_factory = db_session_factory
         self._redis = redis_client
         self._implicit_store = implicit_store
+        self._feishu = feishu_bot
 
         self._handlers: dict[str, Any] = {
             "control_light": self._handle_light,
@@ -217,7 +219,7 @@ class ToolExecutor:
         return {"employee_id": employee_id, "preferences": pref_list}
 
     # ------------------------------------------------------------------
-    # Notification (placeholder until Phase 6 Feishu integration)
+    # Notification — Feishu Bot (Phase 6)
     # ------------------------------------------------------------------
 
     async def _handle_notify(
@@ -227,15 +229,19 @@ class ToolExecutor:
         msg_type: str = "text",
         **_: Any,
     ) -> dict[str, Any]:
+        if self._feishu and self._feishu.available:
+            return await self._feishu.notify(employee_id, message, msg_type)
+
         logger.info(
-            "Feishu notify (placeholder): employee=%s msg=%s",
+            "Feishu not configured, notify skipped: employee=%s msg=%s",
             employee_id,
             message[:100],
         )
         return {
             "notified": employee_id,
             "message": message,
-            "note": "飞书通知将在 Phase 6 接入",
+            "sent": False,
+            "note": "飞书未配置，请在 .env 中设置 FEISHU_APP_ID 等凭证",
         }
 
     # ------------------------------------------------------------------

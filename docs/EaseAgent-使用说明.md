@@ -1,6 +1,6 @@
 # EaseAgent 使用说明
 
-> 最后更新: 2026-03-04 | 版本: Phase 4 (记忆层) | 部署方式: GitHub
+> 最后更新: 2026-03-04 | 版本: Phase 5 (五大模块集成+反射层+ReID) | 部署方式: GitHub
 
 ## 1. 项目简介
 
@@ -8,7 +8,8 @@ EaseAgent 是一个基于 AI 的智能办公环境管理系统。它通过摄像
 
 核心能力：
 
-- **感知层 (Reflex)**: YOLOv8 人员检测 + InsightFace 人脸识别 + 传感器数据采集
+- **感知层 (Perception)**: YOLOv8 人员检测 + InsightFace 人脸识别 + ReID 跨摄像头身份接续 + 多模态身份融合
+- **反射层 (Reflex)**: 无人延时关灯/关空调、CO2 超标加新风、厕位状态推送（毫秒级，无需 LLM）
 - **认知层 (Cognition)**: Qwen3.5 多模态大模型场景理解、行为分析、Function Calling 设备控制
 - **记忆层 (Memory)**: SQLite 显式偏好 + ChromaDB 隐式偏好向量存储 + RAG 检索 + 偏好学习器
 - **通信层 (IoT)**: MQTT 协议设备通信 + EventBus 异步事件总线
@@ -395,7 +396,45 @@ GET http://localhost:8000/health?detail=true
 # Agent 运行一段时间后，隐式偏好会自动积累到 ChromaDB
 ```
 
-### 6.6 设备管理
+### 6.6 反射层 (Phase 5)
+
+反射层实现了毫秒级的确定性响应，无需等待 LLM 决策：
+
+| 场景 | 触发条件 | 反射动作 |
+|------|---------|---------|
+| 无人关灯 | 房间人数降为 0 | 延时 N 秒后关灯 + 关空调 |
+| CO2 超标 | `co2_high` 事件 | 立即将新风设为 HIGH（安全动作，不可被 Agent 覆盖） |
+| 厕位状态 | MQTT 门磁传感器 | 更新厕位占用状态 → WebSocket 推送 |
+
+延时参数在 `config/rooms.yaml` 的 `reflex_rules` 中配置：
+```yaml
+reflex_rules:
+  no_person_delay: 300  # 无人 5 分钟后关闭设备
+```
+
+### 6.7 跨摄像头 ReID (Phase 5)
+
+当员工离开一个摄像头视野、进入另一个摄像头时，ReID 通过外观特征匹配自动继承身份，无需重新进行人脸识别。
+
+- 基于 OSNet 模型提取 512 维外观特征
+- Lost Gallery 保留最近 10 分钟消失的已识别人员
+- 余弦相似度匹配，阈值 0.55
+
+**可选依赖**：`pip install torchreid`。未安装时系统自动降级，仅使用人脸识别。
+
+### 6.8 MQTT 场景模拟
+
+用于测试五大模块（灯光/屏幕/空调/新风/厕位）的端到端通信：
+
+```bash
+# 运行所有场景
+python scripts/simulate_scenario.py
+
+# 可选场景：sensor, co2, toilet, heartbeat, vacancy
+python scripts/simulate_scenario.py --scene co2
+```
+
+### 6.9 设备管理
 
 ```bash
 # 获取设备列表
@@ -422,7 +461,7 @@ DELETE /api/devices/{device_id}
 
 `device_type` 可选值：`light`、`ac`、`screen`、`fresh_air`、`sensor`、`toilet_sensor`
 
-### 6.7 房间管理
+### 6.10 房间管理
 
 ```bash
 # 获取房间列表
@@ -438,7 +477,7 @@ PUT    /api/rooms/{room_id}
 DELETE /api/rooms/{room_id}
 ```
 
-### 6.8 AI Agent 决策日志
+### 6.11 AI Agent 决策日志
 
 ```bash
 # 获取决策日志
@@ -454,7 +493,7 @@ GET /api/agent-logs/stats
 GET /api/agent-logs/{log_id}
 ```
 
-### 6.9 厕位状态
+### 6.12 厕位状态
 
 ```bash
 # 所有厕位状态
@@ -475,7 +514,7 @@ PUT /api/toilet/status/{stall_id}
 { "occupied": true }
 ```
 
-### 6.10 WebSocket 实时推送
+### 6.13 WebSocket 实时推送
 
 ```javascript
 // 浏览器 JavaScript 示例
@@ -668,13 +707,19 @@ easeagent/
 │   ├── rag_retriever.py      # RAG 统一检索
 │   └── preference_learner.py # 偏好学习器
 │
-├── perception/               # 感知层 (Phase 2)
-│   ├── pipeline.py           # 感知管线 (总调度)
+├── reflex/                   # 反射层 (Phase 5)
+│   ├── __init__.py
+│   └── engine.py             # 反射层引擎 (无人关灯/CO2/厕位)
+│
+├── perception/               # 感知层 (Phase 2+5)
+│   ├── pipeline.py           # 感知管线 (总调度+身份融合)
 │   ├── camera_manager.py     # 摄像头管理
 │   ├── frame_sampler.py      # 智能帧采样
 │   ├── detector.py           # YOLOv8 人员检测
 │   ├── face_recognizer.py    # InsightFace 人脸识别
-│   ├── person_tracker.py     # IoU 人员追踪
+│   ├── person_tracker.py     # IoU 人员追踪 + ReID 外观匹配
+│   ├── reid_extractor.py     # ReID 特征提取 (OSNet)
+│   ├── identity_fusion.py    # 多模态身份融合引擎
 │   └── sensor_collector.py   # 传感器数据采集
 │
 ├── iot/                      # IoT 通信层 (Phase 1)
@@ -687,7 +732,8 @@ easeagent/
 │   └── health_check.py       # 健康检查
 │
 ├── scripts/
-│   └── register_faces.py     # 人脸注册 CLI
+│   ├── register_faces.py     # 人脸注册 CLI
+│   └── simulate_scenario.py  # MQTT 场景模拟脚本
 │
 ├── data/                     # 运行时数据 (自动创建)
 │   ├── easeagent.db          # SQLite 数据库
@@ -702,6 +748,7 @@ easeagent/
     ├── EaseAgent-Phase2执行计划.md
     ├── EaseAgent-Phase3-认知层.md
     ├── EaseAgent-Phase4-记忆层.md
+    ├── EaseAgent-Phase5-集成联调.md
     ├── EaseAgent-待办优化清单.md
     └── EaseAgent-QA问答集.md
 ```

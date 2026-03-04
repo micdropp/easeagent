@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+import numpy as np
+
 
 @dataclass
 class TrackedPerson:
@@ -13,6 +15,7 @@ class TrackedPerson:
     last_seen: float = field(default_factory=time.monotonic)
     employee_id: str | None = None
     confidence: float = 0.0
+    appearance: np.ndarray | None = field(default=None, repr=False)
 
     def update_bbox(self, bbox: list[int]) -> None:
         self.bbox = bbox
@@ -22,6 +25,9 @@ class TrackedPerson:
         if self.employee_id is None or confidence > self.confidence:
             self.employee_id = employee_id
             self.confidence = confidence
+
+    def set_appearance(self, feature: np.ndarray) -> None:
+        self.appearance = feature
 
 
 def _iou(a: list[int], b: list[int]) -> float:
@@ -49,22 +55,31 @@ def _center_inside(face_bbox: list[int], person_bbox: list[int]) -> bool:
 
 
 class PersonTracker:
-    """Lightweight IoU-based multi-object tracker.
+    """Lightweight IoU-based multi-object tracker with ReID gallery.
 
     Assigns persistent ``track_id`` values to person detections across frames
     using greedy IoU matching.  Tracks are kept alive for *max_missing_seconds*
     after the last matched detection to tolerate brief occlusions.
+
+    When a track with a known identity is lost, it is stored in the
+    *lost gallery* for cross-camera or re-entry matching via appearance
+    features (ReID).
     """
 
     def __init__(
         self,
         iou_threshold: float = 0.25,
         max_missing_seconds: float = 10.0,
+        gallery_ttl: float = 600.0,
+        reid_threshold: float = 0.55,
     ):
         self._iou_threshold = iou_threshold
         self._max_missing_seconds = max_missing_seconds
+        self._gallery_ttl = gallery_ttl
+        self._reid_threshold = reid_threshold
         self._next_id = 1
         self._tracks: dict[int, TrackedPerson] = {}
+        self._lost_gallery: list[TrackedPerson] = []
 
     @property
     def active_tracks(self) -> list[TrackedPerson]:
@@ -127,7 +142,16 @@ class PersonTracker:
             if now - t.last_seen > self._max_missing_seconds
         ]
         for tid in expired_ids:
-            lost.append(self._tracks.pop(tid))
+            track = self._tracks.pop(tid)
+            lost.append(track)
+            if track.employee_id is not None and track.appearance is not None:
+                self._lost_gallery.append(track)
+
+        # Prune stale gallery entries
+        cutoff = now - self._gallery_ttl
+        self._lost_gallery = [
+            t for t in self._lost_gallery if t.last_seen > cutoff
+        ]
 
         return self.active_tracks, lost
 
@@ -164,3 +188,51 @@ class PersonTracker:
                 best_iou = score
                 best = track
         return best
+
+    # ------------------------------------------------------------------
+    # ReID appearance matching
+    # ------------------------------------------------------------------
+
+    def match_by_appearance(
+        self, feature: np.ndarray
+    ) -> TrackedPerson | None:
+        """Search the lost gallery for a matching identity via cosine similarity."""
+        if not self._lost_gallery or feature is None:
+            return None
+
+        best_match: TrackedPerson | None = None
+        best_score = self._reid_threshold
+
+        for lost_track in self._lost_gallery:
+            if lost_track.appearance is None:
+                continue
+            score = float(np.dot(feature, lost_track.appearance))
+            if score > best_score:
+                best_score = score
+                best_match = lost_track
+
+        return best_match
+
+    def match_across_galleries(
+        self, feature: np.ndarray, galleries: list["PersonTracker"]
+    ) -> TrackedPerson | None:
+        """Search lost galleries from *other* trackers (cross-camera ReID)."""
+        best_match: TrackedPerson | None = None
+        best_score = self._reid_threshold
+
+        for other in galleries:
+            if other is self:
+                continue
+            for lost_track in other._lost_gallery:
+                if lost_track.appearance is None:
+                    continue
+                score = float(np.dot(feature, lost_track.appearance))
+                if score > best_score:
+                    best_score = score
+                    best_match = lost_track
+
+        return best_match
+
+    @property
+    def lost_gallery(self) -> list[TrackedPerson]:
+        return list(self._lost_gallery)

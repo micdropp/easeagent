@@ -34,7 +34,9 @@ TRIGGER_EVENTS = frozenset(
     }
 )
 
-REFLEX_ONLY_EVENTS = frozenset({"person_left", "face_left"})
+REFLEX_ONLY_EVENTS = frozenset({"person_left", "face_left"})  # handled by ReflexEngine, not OTAR
+
+REFLEX_SAFETY_REASONS = frozenset({"co2_high"})  # reflex acts first; agent may add notifications
 
 
 class EaseAgent:
@@ -83,6 +85,8 @@ class EaseAgent:
         for evt in TRIGGER_EVENTS:
             self._event_bus.subscribe(evt, self._on_event)
             logger.debug("Agent subscribed to '%s'", evt)
+        self._event_bus.subscribe("reflex_action", self._on_reflex_action)
+        logger.debug("Agent subscribed to 'reflex_action' for coordination")
 
     # ------------------------------------------------------------------
     # Event handler
@@ -108,6 +112,68 @@ class EaseAgent:
             self._pending.discard(dedup_key)
 
     # ------------------------------------------------------------------
+    # Reflex-layer coordination
+    # ------------------------------------------------------------------
+
+    async def _on_reflex_action(self, event: Event) -> None:
+        """Handle a reflex_action event published by the ReflexEngine.
+
+        Safety actions (e.g. CO2 ventilation) are logged but never
+        overridden.  Non-safety actions are logged and published so the
+        frontend can display them; a future enhancement could trigger a
+        refinement decision here.
+        """
+        room_id = event.room_id or event.data.get("room_id", "unknown")
+        reason = event.data.get("reason", "")
+        actions = event.data.get("actions", [])
+        safety = event.data.get("safety", False)
+
+        logger.info(
+            "Agent received reflex_action: room=%s reason=%s safety=%s actions=%d",
+            room_id, reason, safety, len(actions),
+        )
+
+        if self._db_factory:
+            try:
+                from core.models import DecisionLog
+
+                tag = "[反射层-安全]" if safety else "[反射层]"
+                log = DecisionLog(
+                    room_id=room_id,
+                    trigger_event=f"reflex:{reason}",
+                    agent_reasoning=f"{tag} {reason}",
+                    tool_calls=json.dumps(
+                        [a.get("tool", "") for a in actions], ensure_ascii=False
+                    ),
+                    execution_results=json.dumps(actions, ensure_ascii=False),
+                    latency_ms=0,
+                    success=True,
+                )
+                async with self._db_factory() as session:
+                    session.add(log)
+                    await session.commit()
+            except Exception:
+                logger.exception("Failed to record reflex decision log")
+
+        await self._event_bus.publish(
+            Event(
+                type="agent_decision",
+                data={
+                    "room_id": room_id,
+                    "trigger_event": f"reflex:{reason}",
+                    "reasoning": f"[反射层] {reason}",
+                    "tool_calls": actions,
+                    "results": [],
+                    "latency_ms": 0,
+                    "provider": "reflex",
+                    "safety": safety,
+                },
+                source="agent",
+                room_id=room_id,
+            )
+        )
+
+    # ------------------------------------------------------------------
     # OTAR cycle
     # ------------------------------------------------------------------
 
@@ -127,6 +193,10 @@ class EaseAgent:
             await self._replay_cached(cached)
             latency_ms = (time.perf_counter() - t0) * 1000
 
+            cached_tc = cached.get("tool_calls", [])
+            summary = self._summarize_actions(cached_tc)
+            reasoning = f"[缓存] {summary}"
+
             if self._db_factory:
                 try:
                     from core.models import DecisionLog
@@ -134,10 +204,8 @@ class EaseAgent:
                     log = DecisionLog(
                         room_id=room_id,
                         trigger_event=event.type,
-                        agent_reasoning="[缓存命中] 重放上次决策",
-                        tool_calls=json.dumps(
-                            cached.get("tool_calls", []), ensure_ascii=False
-                        ),
+                        agent_reasoning=reasoning,
+                        tool_calls=json.dumps(cached_tc, ensure_ascii=False),
                         execution_results=json.dumps(
                             cached.get("results", []), ensure_ascii=False
                         ),
@@ -156,8 +224,8 @@ class EaseAgent:
                     data={
                         "room_id": room_id,
                         "trigger_event": event.type,
-                        "reasoning": "[缓存命中] 重放上次决策",
-                        "tool_calls": cached.get("tool_calls", []),
+                        "reasoning": reasoning,
+                        "tool_calls": cached_tc,
                         "results": cached.get("results", []),
                         "latency_ms": round(latency_ms, 1),
                         "provider": "cache",
@@ -178,13 +246,27 @@ class EaseAgent:
 
         # --- ACT ---
         results: list[dict[str, Any]] = []
+        tc_dicts = [
+            {"name": tc.name, "arguments": tc.arguments}
+            for tc in llm_response.tool_calls
+        ]
         if llm_response.tool_calls:
             results = await self._executor.execute_many(llm_response.tool_calls)
 
         latency_ms = (time.perf_counter() - t0) * 1000
 
+        action_summary = self._summarize_actions(tc_dicts)
+        base_reasoning = llm_response.content or ""
+        enriched_reasoning = (
+            f"{base_reasoning} | 动作: {action_summary}"
+            if tc_dicts
+            else base_reasoning or "无操作"
+        )
+
         # --- REFLECT ---
-        await self._record_decision(event, llm_response, results, latency_ms)
+        await self._record_decision(
+            event, llm_response, results, latency_ms, enriched_reasoning
+        )
         await self._cache_decision(cache_key, llm_response, results)
         await self._learn_from_decision(event, llm_response, results)
 
@@ -194,11 +276,8 @@ class EaseAgent:
                 data={
                     "room_id": room_id,
                     "trigger_event": event.type,
-                    "reasoning": llm_response.content,
-                    "tool_calls": [
-                        {"name": tc.name, "arguments": tc.arguments}
-                        for tc in llm_response.tool_calls
-                    ],
+                    "reasoning": enriched_reasoning,
+                    "tool_calls": tc_dicts,
                     "results": results,
                     "latency_ms": round(latency_ms, 1),
                     "provider": llm_response.provider,
@@ -209,13 +288,93 @@ class EaseAgent:
         )
 
         logger.info(
-            "Agent decision for [%s] room=%s: %d tool calls, %.0fms (%s)",
+            "Agent decision for [%s] room=%s: %d tool calls, %.0fms (%s) — %s",
             event.type,
             room_id,
             len(llm_response.tool_calls),
             latency_ms,
             llm_response.provider,
+            action_summary,
         )
+
+    # ------------------------------------------------------------------
+    # Action summarization
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _summarize_actions(tool_calls: list[dict[str, Any]]) -> str:
+        """Turn a list of tool_call dicts into a concise Chinese summary."""
+        _TOOL_LABELS: dict[str, str] = {
+            "control_light": "调灯光",
+            "control_curtain": "调窗帘",
+            "control_ac": "调空调",
+            "control_screen": "设屏幕",
+            "control_fresh_air": "调新风",
+            "get_employee_preference": "查偏好",
+            "notify_feishu": "飞书通知",
+            "update_preference_memory": "记偏好",
+        }
+        parts: list[str] = []
+        for tc in tool_calls:
+            name = tc.get("name", "")
+            args = tc.get("arguments", {})
+            label = _TOOL_LABELS.get(name, name)
+
+            detail_parts: list[str] = []
+            if name == "get_employee_preference":
+                eid = args.get("employee_id", "")
+                if eid:
+                    detail_parts.append(eid)
+            elif name == "control_light":
+                action = args.get("action", "")
+                brightness = args.get("brightness")
+                room = args.get("room_id", "")
+                detail_parts.append(room)
+                if action:
+                    detail_parts.append(action)
+                if brightness is not None:
+                    detail_parts.append(f"{brightness}%")
+            elif name == "control_ac":
+                action = args.get("action", "")
+                temp = args.get("temperature")
+                mode = args.get("mode", "")
+                room = args.get("room_id", "")
+                detail_parts.append(room)
+                if action:
+                    detail_parts.append(action)
+                if temp is not None:
+                    detail_parts.append(f"{temp}°C")
+                if mode:
+                    detail_parts.append(mode)
+            elif name == "control_curtain":
+                action = args.get("action", "")
+                room = args.get("room_id", "")
+                detail_parts.append(room)
+                if action:
+                    detail_parts.append(action)
+            elif name == "control_screen":
+                ct = args.get("content_type", "")
+                sid = args.get("screen_id", "")
+                detail_parts.append(sid)
+                if ct:
+                    detail_parts.append(ct)
+            elif name == "control_fresh_air":
+                level = args.get("level", "")
+                if level:
+                    detail_parts.append(level)
+            elif name == "notify_feishu":
+                eid = args.get("employee_id", "")
+                if eid:
+                    detail_parts.append(eid)
+            elif name == "update_preference_memory":
+                eid = args.get("employee_id", "")
+                if eid:
+                    detail_parts.append(eid)
+
+            detail = ", ".join(d for d in detail_parts if d)
+            parts.append(f"{label}({detail})" if detail else label)
+
+        return " → ".join(parts) if parts else "无操作"
 
     # ------------------------------------------------------------------
     # Preference learning
@@ -343,6 +502,7 @@ class EaseAgent:
         response: LLMResponse,
         results: list[dict[str, Any]],
         latency_ms: float,
+        enriched_reasoning: str | None = None,
     ) -> None:
         if not self._db_factory:
             return
@@ -367,7 +527,6 @@ class EaseAgent:
             sensor_data = None
             try:
                 from perception.sensor_collector import SensorCollector
-                # sensor data is already part of the prompt; log a snapshot
                 if hasattr(self, "_sensor") and self._sensor:
                     sd = self._sensor.get_latest(room_id)
                     if sd:
@@ -379,6 +538,10 @@ class EaseAgent:
                 r.get("status") == "success" for r in results
             ) if results else True
 
+            reasoning_text = enriched_reasoning or (
+                response.content[:2000] if response.content else None
+            )
+
             log = DecisionLog(
                 room_id=room_id,
                 trigger_event=event.type,
@@ -387,7 +550,7 @@ class EaseAgent:
                     ensure_ascii=False,
                 ) if occupants else None,
                 sensor_data=sensor_data,
-                agent_reasoning=response.content[:2000] if response.content else None,
+                agent_reasoning=reasoning_text,
                 tool_calls=tool_calls_json,
                 execution_results=results_json,
                 latency_ms=int(latency_ms),

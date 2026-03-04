@@ -130,6 +130,59 @@ async def lifespan(app: FastAPI):
         logger.warning("MemorySystem init failed, running without memory layer", exc_info=True)
         app.state.memory = None
 
+    # --- Phase 5: Reflex layer ---
+    reflex_engine = None
+    try:
+        from reflex.engine import ReflexEngine
+
+        reflex_engine = ReflexEngine(
+            event_bus=event_bus,
+            tool_executor=None,  # patched below after ToolExecutor is created
+            mqtt_client=mqtt_client,
+        )
+        app.state.reflex = reflex_engine
+        logger.info("ReflexEngine created (will subscribe after ToolExecutor)")
+    except Exception:
+        logger.warning("ReflexEngine init failed, running without reflex layer", exc_info=True)
+        app.state.reflex = None
+
+    # --- Phase 6: Feishu integration ---
+    feishu_bot = None
+    attendance_sync = None
+    if settings.feishu.enabled:
+        try:
+            from feishu.bot import FeishuBot
+            from feishu.attendance import AttendanceSync
+
+            feishu_bot = FeishuBot(
+                app_id=settings.feishu.app_id,
+                app_secret=settings.feishu.app_secret,
+                bot_webhook=settings.feishu.bot_webhook,
+            )
+            app.state.feishu_bot = feishu_bot
+
+            attendance_sync = AttendanceSync(
+                event_bus=event_bus,
+                app_id=settings.feishu.app_id,
+                app_secret=settings.feishu.app_secret,
+                poll_interval=settings.feishu.attendance_poll_interval,
+            )
+            await attendance_sync.start()
+            app.state.attendance_sync = attendance_sync
+
+            if feishu_bot.available:
+                logger.info("Feishu Bot initialised (webhook=%s)", bool(settings.feishu.bot_webhook))
+            else:
+                logger.info("Feishu Bot not configured (no credentials), notifications disabled")
+        except Exception:
+            logger.warning("Feishu init failed, running without Feishu", exc_info=True)
+            app.state.feishu_bot = None
+            app.state.attendance_sync = None
+    else:
+        app.state.feishu_bot = None
+        app.state.attendance_sync = None
+        logger.info("Feishu disabled (feishu.enabled=false)")
+
     # --- Phase 3: Cognition layer (Agent + ScenePatrol) ---
     ease_agent = None
     scene_patrol = None
@@ -151,6 +204,7 @@ async def lifespan(app: FastAPI):
             db_session_factory=db_factory,
             redis_client=app.state.redis,
             implicit_store=memory_system.implicit if memory_system else None,
+            feishu_bot=feishu_bot,
         )
         conflict_resolver = ConflictResolver()
         prompt_builder = PromptBuilder(
@@ -195,11 +249,33 @@ async def lifespan(app: FastAPI):
         app.state.agent = None
         app.state.scene_patrol = None
 
+    # --- Wire up reflex engine with ToolExecutor ---
+    if reflex_engine is not None:
+        try:
+            if ease_agent is not None:
+                reflex_engine._executor = ease_agent._executor
+                reflex_engine.subscribe()
+                await reflex_engine.start_toilet_mqtt(settings.mqtt.topic_prefix)
+                logger.info("ReflexEngine fully wired and subscribed")
+            else:
+                logger.warning(
+                    "ReflexEngine skipped: no ToolExecutor available "
+                    "(cognitive layer not initialised)"
+                )
+        except Exception:
+            logger.warning("ReflexEngine wiring failed", exc_info=True)
+
     logger.info("EaseAgent ready — http://%s:%s", settings.server.host, settings.server.port)
 
     yield
 
     logger.info("EaseAgent shutting down...")
+    if attendance_sync is not None:
+        await attendance_sync.stop()
+    if feishu_bot is not None:
+        await feishu_bot.close()
+    if reflex_engine is not None:
+        await reflex_engine.stop()
     if scene_patrol is not None:
         await scene_patrol.stop()
     if perception_pipeline is not None:
@@ -233,6 +309,7 @@ app.add_middleware(
 
 from api.routes import agent_log, devices, employees, preferences, rooms, toilet, video
 from api.websocket import realtime
+from feishu.mini_app_api import router as feishu_router
 
 app.include_router(devices.router, prefix="/api/devices", tags=["devices"])
 app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"])
@@ -242,6 +319,7 @@ app.include_router(agent_log.router, prefix="/api/agent-logs", tags=["agent-logs
 app.include_router(toilet.router, prefix="/api/toilet", tags=["toilet"])
 app.include_router(video.router, prefix="/api/video", tags=["video"])
 app.include_router(realtime.router, prefix="/ws", tags=["websocket"])
+app.include_router(feishu_router)
 
 
 @app.get("/health")

@@ -90,6 +90,14 @@ class DeviceHeartbeatSettings(BaseSettings):
     timeout: int = 90
 
 
+class FeishuSettings(BaseSettings):
+    enabled: bool = False
+    app_id: str = ""
+    app_secret: str = ""
+    bot_webhook: str = ""
+    attendance_poll_interval: float = 300.0
+
+
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -107,6 +115,7 @@ class Settings(BaseSettings):
     device_heartbeat: DeviceHeartbeatSettings = Field(
         default_factory=DeviceHeartbeatSettings
     )
+    feishu: FeishuSettings = Field(default_factory=FeishuSettings)
 
     model_config = {"env_prefix": "EASEAGENT_", "env_nested_delimiter": "__"}
 
@@ -124,6 +133,7 @@ def _build_settings() -> Settings:
         "ai": AISettings,
         "llm": LLMSettings,
         "device_heartbeat": DeviceHeartbeatSettings,
+        "feishu": FeishuSettings,
     }
     for key, cls in field_map.items():
         section = yaml_data.get(key, {})

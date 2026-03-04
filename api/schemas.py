@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class DeviceCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=128)
-    device_type: str = Field(..., pattern=r"^(light|ac|screen|fresh_air|sensor|toilet_sensor)$")
+    device_type: str = Field(..., pattern=r"^(light|ac|screen|fresh_air|sensor|toilet_sensor|curtain)$")
     room_id: Optional[str] = None
     protocol: str = "mqtt"
     mqtt_topic: Optional[str] = None

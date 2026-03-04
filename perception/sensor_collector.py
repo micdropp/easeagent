@@ -85,6 +85,7 @@ class SensorCollector:
                     type="co2_high",
                     data={"room_id": room_id, "co2_value": co2},
                     source="sensor_collector",
+                    room_id=room_id,
                 )
             )
 
