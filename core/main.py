@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -265,9 +266,40 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.warning("ReflexEngine wiring failed", exc_info=True)
 
+    async def _log_retention_loop():
+        """Periodically prune decision_logs to keep at most MAX_LOGS rows."""
+        MAX_LOGS = 2000
+        INTERVAL = 600  # every 10 minutes
+        from core.database import get_session_factory as _gsf
+        from sqlalchemy import text
+
+        factory = _gsf()
+        while True:
+            await asyncio.sleep(INTERVAL)
+            try:
+                async with factory() as session:
+                    result = await session.execute(text("SELECT COUNT(*) FROM decision_logs"))
+                    count = result.scalar() or 0
+                    if count > MAX_LOGS:
+                        await session.execute(text(f"""
+                            DELETE FROM decision_logs
+                            WHERE id NOT IN (
+                                SELECT id FROM decision_logs ORDER BY created_at DESC LIMIT {MAX_LOGS}
+                            )
+                        """))
+                        await session.commit()
+                        logger.info("Log retention: pruned %d old logs (kept %d)", count - MAX_LOGS, MAX_LOGS)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.debug("Log retention task error", exc_info=True)
+
+    retention_task = asyncio.create_task(_log_retention_loop())
     logger.info("EaseAgent ready — http://%s:%s", settings.server.host, settings.server.port)
 
     yield
+
+    retention_task.cancel()
 
     logger.info("EaseAgent shutting down...")
     if attendance_sync is not None:

@@ -76,6 +76,9 @@ class EaseAgent:
         self._pending: set[str] = set()
         self._lock = asyncio.Lock()
 
+        self._replay_cooldown: dict[str, float] = {}
+        self._replay_cooldown_sec = 60.0
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -187,6 +190,17 @@ class EaseAgent:
         cache_key = self._build_cache_key(event)
         cached = await self._check_cache(cache_key)
         if cached:
+            now = time.monotonic()
+            last = self._replay_cooldown.get(cache_key, 0.0)
+            if now - last < self._replay_cooldown_sec:
+                logger.debug(
+                    "Cache cooldown active for %s (%.0fs left), skipping",
+                    cache_key,
+                    self._replay_cooldown_sec - (now - last),
+                )
+                return
+
+            self._replay_cooldown[cache_key] = now
             logger.info(
                 "Cache hit for %s — replaying cached decision", cache_key
             )

@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -108,6 +109,11 @@ class Device(Base):
 
 class DecisionLog(Base):
     __tablename__ = "decision_logs"
+    __table_args__ = (
+        Index("ix_decision_logs_created_at", "created_at"),
+        Index("ix_decision_logs_room_id", "room_id"),
+        Index("ix_decision_logs_success", "success"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     room_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
